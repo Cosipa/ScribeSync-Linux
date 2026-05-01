@@ -1,0 +1,5 @@
+# Configuration file for scribeSync.sh
+# Override default paths by uncommenting and modifying the lines below
+
+# Path to the assets folder for pdf notebooks (needed for symlinks)
+# AssetsFolder="/home/user/ScribeSync-Linux/pdf"
