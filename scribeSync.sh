@@ -9,7 +9,7 @@ if [[ -f "./config.ini" ]]; then
     source "./config.ini"
     set +a
 else
-    log_status "error" "Config file ./config.ini not found, exiting script"
+    printf 'ERROR: Config file ./config.ini not found, exiting script\n' >&2
     exit 1
 fi
 
@@ -63,7 +63,6 @@ log_status() {
 section_header() {
     local title="$1"
     printf "\n${BOLD}%s${NC}\n" "$title"
-    printf '%s\n' "$title" | tr ' ' '-'
     printf "\n"
 }
 
@@ -110,7 +109,7 @@ else
 fi
 
 # Create folder structure
-mkdir /mnt/MTP > /dev/null 2>&1;
+mkdir -p /mnt/MTP > /dev/null 2>&1
 mkdir -p ./sync_data/{notebooks,epub,pdf}
 
 # Mount the Scribe
