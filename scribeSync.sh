@@ -1,6 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+update_symlinks_only=false
+for argument in "$@"; do
+    case "$argument" in
+        --update-symlinks)
+            update_symlinks_only=true
+            ;;
+        -h|--help)
+            printf 'Usage: %s [--update-symlinks]\n' "$0"
+            printf '  --update-symlinks  Update links from local PDFs and labels without a connected device.\n'
+            exit 0
+            ;;
+        *)
+            printf 'ERROR: Unknown argument: %s\n' "$argument" >&2
+            exit 1
+            ;;
+    esac
+done
+
 clear
 
 # Load config if it exists
@@ -80,6 +98,53 @@ get_file_hash() {
     md5sum "$1" | awk '{ print $1 }'
 }
 
+# Read labels for both a full sync and an offline symlink update.
+load_notebook_labels() {
+    local jsonContent key value sanitizedValue
+    if [ -s "./notebook_labels.json" ]; then
+        jsonContent=$(<"./notebook_labels.json")
+    else
+        jsonContent='{}'
+        log_status "warning" "No existing notebook labels found, using default labels"
+    fi
+
+    # Validate JSON before reading through process substitution.
+    jq empty <<< "$jsonContent"
+    while IFS="=" read -r key value; do
+        [[ -z "$key" ]] && continue
+        key=$(echo "$key" | tr -d ' "')
+        value=$(echo "$value" | sed 's/^"//' | sed 's/"$//')
+        sanitizedValue=$(echo "$value" | tr -d "'")
+        notebookLabels["$key"]="$sanitizedValue"
+    done < <(jq -r 'to_entries | .[] | "\(.key)=\(.value)"' <<< "$jsonContent")
+}
+
+update_notebook_symlinks() {
+    local exportedPdfPath pdfFileName notebookId label assets_path
+    local -a PDFs
+    section_header "Notebook registry information"
+    shopt -s nullglob
+    PDFs=("./sync_data/pdf"/*.pdf)
+
+    if [ ${#PDFs[@]} -eq 0 ]; then
+        log_status "warning" "No PDF files found in the source folder: ./sync_data/pdf"
+        return 1
+    fi
+
+    log_status "info" "Found ${#PDFs[@]} local notebooks"
+    assets_path=$(cd "$AssetsFolder" && pwd)
+    section_header "Creating Notebook Symlinks"
+    mkdir -p "$HOME/Notebooks"
+
+    for exportedPdfPath in "${PDFs[@]}"; do
+        pdfFileName=$(basename "$exportedPdfPath")
+        notebookId="${pdfFileName%.pdf}"
+        label="${notebookLabels[$notebookId]:-Scribe Notebook for $notebookId}"
+        ln -sf "$assets_path/$pdfFileName" "$HOME/Notebooks/$label.pdf"
+        log_status "success" "Created symlink: $label.pdf"
+    done
+}
+
 # Keep our FUSE mount private so cleanup cannot unmount another MTP client.
 mount_dir=""
 mount_point=""
@@ -132,7 +197,20 @@ trap 'exit 143' TERM
 
 section_header "Kindle Scribe Sync"
 
-for dependency in go-mtpfs mountpoint lsusb jq md5sum calibre-debug ebook-convert; do
+if ! command -v jq > /dev/null; then
+    log_status "error" "Required command not found: jq"
+    exit 1
+fi
+
+declare -A notebookLabels
+load_notebook_labels
+
+if [[ "$update_symlinks_only" == true ]]; then
+    update_notebook_symlinks
+    exit 0
+fi
+
+for dependency in go-mtpfs mountpoint lsusb md5sum calibre-debug ebook-convert; do
     if ! command -v "$dependency" > /dev/null; then
         log_status "error" "Required command not found: $dependency"
         exit 1
@@ -154,14 +232,6 @@ while ! lsusb | grep -iq 'scribe'; do
 done
 clear_line
 log_status "info" "Kindle Scribe connected"
-
-# Read or initialize notebook labels JSON file
-if [ -s "./notebook_labels.json" ]; then
-    jsonContent=$(<"./notebook_labels.json")
-else
-    jsonContent='{}'
-    log_status "warning" "No existing notebook labels found, creating new labels file"
-fi
 
 mkdir -p ./sync_data/{notebooks,epub,pdf}
 
@@ -208,21 +278,6 @@ if [[ -z "$notebooks_path" ]]; then
     log_status "error" "No .notebooks directory found on the Scribe"
     exit 1
 fi
-
-# Process JSON data
-declare -A notebookLabels
-while IFS="=" read -r key value; do
-    [[ -z "$key" ]] && continue
-    key=$(echo "$key" | tr -d ' "')
-    value=$(echo "$value" | sed 's/^"//' | sed 's/"$//')
-    notebookLabels["$key"]="$value"
-done < <(jq -r 'to_entries | .[] | "\(.key)=\(.value)"' <<< "$jsonContent")
-
-# Sanitize entries
-for key in "${!notebookLabels[@]}"; do
-    sanitizedValue=$(echo "${notebookLabels[$key]}" | tr -d "'")
-    notebookLabels["$key"]="$sanitizedValue"
-done
 
 # Phase 1: Detect changes and copy notebooks (while Scribe is mounted)
 section_header "Notebook Detection & Copy Phase"
@@ -342,26 +397,5 @@ jsonObject=$(jq -n '{
 # Store the json on file
 echo "$jsonObject" | jq '.' > ./notebook_labels.json
 
-# Process PDF files
-section_header "Notebook registry information"
-shopt -s nullglob
-PDFs=("./sync_data/pdf"/*.pdf)
-
-if [ ${#PDFs[@]} -eq 0 ]; then
-    log_status "warning" "No PDF files found in the source folder: ./sync_data/pdf"
-    exit 1
-fi
-
-log_status "info" "Found ${#PDFs[@]} notebooks in the Scribe"
-
 # Phase 4: Create symlinks to notebooks in home directory
-section_header "Creating Notebook Symlinks"
-mkdir -p "$HOME/Notebooks"
-
-for exportedPdfPath in "${PDFs[@]}"; do
-    pdfFileName=$(basename "$exportedPdfPath")
-    notebookId="${pdfFileName%.pdf}"
-    label="${notebookLabelMap[$notebookId]:-${notebookLabels[$notebookId]:-Scribe Notebook for $notebookId}}"
-    ln -sf "$(cd "$AssetsFolder" && pwd)/$pdfFileName" "$HOME/Notebooks/$label.pdf"
-    log_status "success" "Created symlink: $label.pdf"
-done
+update_notebook_symlinks

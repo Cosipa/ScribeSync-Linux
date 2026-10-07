@@ -91,6 +91,9 @@ names:
 # Run the sync
 ./scribeSync.sh
 
+# Update symlinks from existing local PDFs and notebook labels (no device needed)
+./scribeSync.sh --update-symlinks
+
 # Open a specific notebook interactively (after first sync)
 ./nb-open.sh
 ```
@@ -102,6 +105,12 @@ The script will:
 3. Unmount the device if the script mounted it
 4. Convert local copies to EPUB and PDF in `sync_data/epub/` and `sync_data/pdf/`
 5. Create symlinks in `~/Notebooks/` with the proper notebook labels you set.
+
+`--update-symlinks` only recreates links in `~/Notebooks/` using existing
+`sync_data/pdf/` files, `notebook_labels.json`, and `AssetsFolder` from
+`config.ini`. It requires `jq`, but skips USB detection, mounting, and Calibre
+conversion. It does not modify PDFs or labels, or remove old links after renaming
+labels.
 
 MTP has no remote checksum API, so each `nbk` is downloaded to a temporary file
 for comparison. Failed transfers leave existing backups untouched. Missing or
